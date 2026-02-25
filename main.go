@@ -140,13 +140,103 @@ func attachOrCreate(session, dir string) {
 	}
 }
 
-func killAll()                                  { fmt.Println("TODO: kill-all") }
-func killOther(name string)                     { fmt.Println("TODO: kill-other") }
-func killSession(session string)                { fmt.Println("TODO: kill") }
-func liveSession(session string)                { fmt.Println("TODO: live") }
-func switchSession(name string)                 { fmt.Println("TODO: switch") }
-func renameSession(old, new string)             { fmt.Println("TODO: rename") }
-func runInSession(session string, cmd []string) { fmt.Println("TODO: run") }
+func killSession(session string) {
+	_, err := tmuxCmd("kill-session", "-t", session)
+	if err != nil {
+		fatal("Not found: " + session)
+	}
+	fmt.Println(green + "Killed: " + reset + session)
+}
+
+func liveSession(session string) {
+	cmd := exec.Command("tmux", "attach", "-t", session, "-r")
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		fatal("Not found: " + session)
+	}
+}
+
+func killAll() {
+	_, err := tmuxCmd("kill-server")
+	if err != nil {
+		fmt.Println(gray + "No sessions running." + reset)
+		return
+	}
+	fmt.Println(green + "All sessions killed." + reset)
+}
+
+func getCurrentSession() string {
+	tmuxEnv := os.Getenv("TMUX")
+	if tmuxEnv == "" {
+		return ""
+	}
+	name, err := tmuxCmd("display-message", "-p", "#{session_name}")
+	if err != nil {
+		return ""
+	}
+	return name
+}
+
+func killOther(keep string) {
+	if keep == "" {
+		keep = getCurrentSession()
+		if keep == "" {
+			fatal("Not inside tmux. Usage: ts kill-other <name>")
+		}
+	}
+
+	out, err := tmuxCmd("list-sessions", "-F", "#{session_name}")
+	if err != nil || out == "" {
+		fmt.Println(gray + "No sessions running." + reset)
+		return
+	}
+
+	killed := 0
+	for _, name := range strings.Split(out, "\n") {
+		name = strings.TrimSpace(name)
+		if name == "" || name == keep {
+			continue
+		}
+		tmuxCmd("kill-session", "-t", name)
+		fmt.Println(gray + "  Killed: " + name + reset)
+		killed++
+	}
+
+	if killed == 0 {
+		fmt.Println(gray + "No other sessions to kill." + reset)
+	} else {
+		fmt.Printf("%sKilled %d session(s). Kept: %s%s\n", green, killed, keep, reset)
+	}
+}
+
+func renameSession(old, newName string) {
+	_, err := tmuxCmd("rename-session", "-t", old, newName)
+	if err != nil {
+		fatal("Not found: " + old)
+	}
+	fmt.Println(green + "Renamed: " + reset + old + " → " + newName)
+}
+
+func switchSession(name string) {
+	if os.Getenv("TMUX") == "" {
+		fatal("Not inside tmux. Use: ts " + name)
+	}
+	_, err := tmuxCmd("switch-client", "-t", name)
+	if err != nil {
+		fatal("Not found: " + name)
+	}
+}
+
+func runInSession(session string, cmdArgs []string) {
+	command := strings.Join(cmdArgs, " ")
+	_, err := tmuxCmd("send-keys", "-t", session, command, "Enter")
+	if err != nil {
+		fatal("Not found: " + session)
+	}
+	fmt.Println(green + "Sent to " + session + ": " + reset + command)
+}
 
 func listSessions() {
 	out, err := tmuxCmd("list-sessions", "-F", "#{session_name}\t#{session_windows}\t#{session_attached}\t#{pane_current_path}\t#{pane_current_command}")
