@@ -29,6 +29,7 @@ func usage() {
 	fmt.Println("  ts <name> live" + gray + "              " + reset + "attach read-only")
 	fmt.Println("  ts <name> rename <new>" + gray + "      " + reset + "rename a session")
 	fmt.Println("  ts <name> run <cmd...>" + gray + "      " + reset + "send command to session")
+	fmt.Println("  ts detach" + gray + "                   " + reset + "detach from current session")
 	fmt.Println("  ts switch <name>" + gray + "            " + reset + "switch client to session")
 	fmt.Println("  ts kill-all" + gray + "                 " + reset + "kill all sessions")
 	fmt.Println("  ts kill-other" + gray + "               " + reset + "kill all except current")
@@ -76,6 +77,8 @@ func main() {
 			name = args[1]
 		}
 		killOther(name)
+	case "detach":
+		detachSession()
 	case "switch":
 		if len(args) < 2 {
 			fatal("Usage: ts switch <name>")
@@ -217,6 +220,16 @@ func renameSession(old, newName string) {
 		fatal("Not found: " + old)
 	}
 	fmt.Println(green + "Renamed: " + reset + old + " → " + newName)
+}
+
+func detachSession() {
+	if os.Getenv("TMUX") == "" {
+		fatal("Not inside tmux.")
+	}
+	_, err := tmuxCmd("detach-client")
+	if err != nil {
+		fatal("Failed to detach.")
+	}
 }
 
 func switchSession(name string) {
