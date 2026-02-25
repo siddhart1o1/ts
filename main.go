@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 )
@@ -48,15 +49,104 @@ func shortenHome(path string) string {
 	return path
 }
 
+func fatal(msg string) {
+	fmt.Fprintln(os.Stderr, "\033[31m"+msg+reset)
+	os.Exit(1)
+}
+
 func main() {
 	args := os.Args[1:]
 	if len(args) == 0 {
 		listSessions()
 		return
 	}
-	// TODO: route commands
-	usage()
+
+	session := args[0]
+	action := ""
+	if len(args) > 1 {
+		action = args[1]
+	}
+
+	switch session {
+	case "kill-all":
+		killAll()
+	case "kill-other":
+		name := ""
+		if len(args) > 1 {
+			name = args[1]
+		}
+		killOther(name)
+	case "switch":
+		if len(args) < 2 {
+			fatal("Usage: ts switch <name>")
+		}
+		switchSession(args[1])
+	case "help", "--help", "-h":
+		usage()
+	default:
+		switch action {
+		case "":
+			attachOrCreate(session, "")
+		case "kill":
+			killSession(session)
+		case "live":
+			liveSession(session)
+		case "rename":
+			if len(args) < 3 {
+				fatal("Usage: ts <name> rename <new-name>")
+			}
+			renameSession(session, args[2])
+		case "run":
+			if len(args) < 3 {
+				fatal("Usage: ts <name> run <command...>")
+			}
+			runInSession(session, args[2:])
+		default:
+			// ts <name> <path> — create session at path
+			attachOrCreate(session, action)
+		}
+	}
 }
+
+func attachOrCreate(session, dir string) {
+	// Try attach first
+	if dir == "" {
+		cmd := exec.Command("tmux", "attach", "-t", session)
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if cmd.Run() == nil {
+			return
+		}
+	}
+
+	// Create new session
+	args := []string{"new-session", "-s", session}
+	if dir != "" {
+		absDir := dir
+		if !filepath.IsAbs(dir) {
+			if wd, err := os.Getwd(); err == nil {
+				absDir = filepath.Join(wd, dir)
+			}
+		}
+		args = append(args, "-c", absDir)
+	}
+	cmd := exec.Command("tmux", args...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		fatal("Failed to create session: " + session)
+	}
+}
+
+func killAll()                                  { fmt.Println("TODO: kill-all") }
+func killOther(name string)                     { fmt.Println("TODO: kill-other") }
+func killSession(session string)                { fmt.Println("TODO: kill") }
+func liveSession(session string)                { fmt.Println("TODO: live") }
+func switchSession(name string)                 { fmt.Println("TODO: switch") }
+func renameSession(old, new string)             { fmt.Println("TODO: rename") }
+func runInSession(session string, cmd []string) { fmt.Println("TODO: run") }
 
 func listSessions() {
 	out, err := tmuxCmd("list-sessions", "-F", "#{session_name}\t#{session_windows}\t#{session_attached}\t#{pane_current_path}\t#{pane_current_command}")
