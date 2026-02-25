@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"text/tabwriter"
+
+	"github.com/siddharth/ts/tmux"
+	"github.com/siddharth/ts/tui"
 )
 
 const (
@@ -23,6 +26,7 @@ func usage() {
 	fmt.Println(bold + "ts" + reset + " — tmux session manager\n")
 	fmt.Println("Usage:")
 	fmt.Println("  ts" + gray + "                          " + reset + "list sessions")
+	fmt.Println("  ts ui" + gray + "                       " + reset + "interactive TUI mode")
 	fmt.Println("  ts <name>" + gray + "                   " + reset + "attach or create session")
 	fmt.Println("  ts <name> <path>" + gray + "            " + reset + "create session in directory")
 	fmt.Println("  ts <name> kill" + gray + "              " + reset + "kill a session")
@@ -34,20 +38,6 @@ func usage() {
 	fmt.Println("  ts kill-all" + gray + "                 " + reset + "kill all sessions")
 	fmt.Println("  ts kill-other" + gray + "               " + reset + "kill all except current")
 	fmt.Println("  ts kill-other <name>" + gray + "        " + reset + "kill all except <name>")
-}
-
-func tmuxCmd(args ...string) (string, error) {
-	cmd := exec.Command("tmux", args...)
-	out, err := cmd.CombinedOutput()
-	return strings.TrimSpace(string(out)), err
-}
-
-func shortenHome(path string) string {
-	home, _ := os.UserHomeDir()
-	if strings.HasPrefix(path, home) {
-		return "~" + path[len(home):]
-	}
-	return path
 }
 
 func fatal(msg string) {
@@ -69,6 +59,8 @@ func main() {
 	}
 
 	switch session {
+	case "ui":
+		startTUI()
 	case "kill-all":
 		killAll()
 	case "kill-other":
@@ -111,6 +103,16 @@ func main() {
 	}
 }
 
+func startTUI() {
+	attachTo, err := tui.Run()
+	if err != nil {
+		fatal("TUI error: " + err.Error())
+	}
+	if attachTo != "" {
+		attachOrCreate(attachTo, "")
+	}
+}
+
 func attachOrCreate(session, dir string) {
 	// Try attach first
 	if dir == "" {
@@ -144,7 +146,7 @@ func attachOrCreate(session, dir string) {
 }
 
 func killSession(session string) {
-	_, err := tmuxCmd("kill-session", "-t", session)
+	_, err := tmux.Cmd("kill-session", "-t", session)
 	if err != nil {
 		fatal("Not found: " + session)
 	}
@@ -162,7 +164,7 @@ func liveSession(session string) {
 }
 
 func killAll() {
-	_, err := tmuxCmd("kill-server")
+	_, err := tmux.Cmd("kill-server")
 	if err != nil {
 		fmt.Println(gray + "No sessions running." + reset)
 		return
@@ -170,27 +172,15 @@ func killAll() {
 	fmt.Println(green + "All sessions killed." + reset)
 }
 
-func getCurrentSession() string {
-	tmuxEnv := os.Getenv("TMUX")
-	if tmuxEnv == "" {
-		return ""
-	}
-	name, err := tmuxCmd("display-message", "-p", "#{session_name}")
-	if err != nil {
-		return ""
-	}
-	return name
-}
-
 func killOther(keep string) {
 	if keep == "" {
-		keep = getCurrentSession()
+		keep = tmux.GetCurrentSession()
 		if keep == "" {
 			fatal("Not inside tmux. Usage: ts kill-other <name>")
 		}
 	}
 
-	out, err := tmuxCmd("list-sessions", "-F", "#{session_name}")
+	out, err := tmux.Cmd("list-sessions", "-F", "#{session_name}")
 	if err != nil || out == "" {
 		fmt.Println(gray + "No sessions running." + reset)
 		return
@@ -202,7 +192,7 @@ func killOther(keep string) {
 		if name == "" || name == keep {
 			continue
 		}
-		tmuxCmd("kill-session", "-t", name)
+		tmux.Cmd("kill-session", "-t", name)
 		fmt.Println(gray + "  Killed: " + name + reset)
 		killed++
 	}
@@ -215,18 +205,18 @@ func killOther(keep string) {
 }
 
 func renameSession(old, newName string) {
-	_, err := tmuxCmd("rename-session", "-t", old, newName)
+	_, err := tmux.Cmd("rename-session", "-t", old, newName)
 	if err != nil {
 		fatal("Not found: " + old)
 	}
-	fmt.Println(green + "Renamed: " + reset + old + " → " + newName)
+	fmt.Println(green + "Renamed: " + reset + old + " -> " + newName)
 }
 
 func detachSession() {
 	if os.Getenv("TMUX") == "" {
 		fatal("Not inside tmux.")
 	}
-	_, err := tmuxCmd("detach-client")
+	_, err := tmux.Cmd("detach-client")
 	if err != nil {
 		fatal("Failed to detach.")
 	}
@@ -236,7 +226,7 @@ func switchSession(name string) {
 	if os.Getenv("TMUX") == "" {
 		fatal("Not inside tmux. Use: ts " + name)
 	}
-	_, err := tmuxCmd("switch-client", "-t", name)
+	_, err := tmux.Cmd("switch-client", "-t", name)
 	if err != nil {
 		fatal("Not found: " + name)
 	}
@@ -244,7 +234,7 @@ func switchSession(name string) {
 
 func runInSession(session string, cmdArgs []string) {
 	command := strings.Join(cmdArgs, " ")
-	_, err := tmuxCmd("send-keys", "-t", session, command, "Enter")
+	_, err := tmux.Cmd("send-keys", "-t", session, command, "Enter")
 	if err != nil {
 		fatal("Not found: " + session)
 	}
@@ -252,48 +242,37 @@ func runInSession(session string, cmdArgs []string) {
 }
 
 func listSessions() {
-	out, err := tmuxCmd("list-sessions", "-F", "#{session_name}\t#{session_windows}\t#{session_attached}\t#{pane_current_path}\t#{pane_current_command}")
-	if err != nil || out == "" {
+	sessions, err := tmux.ListSessions()
+	if err != nil || len(sessions) == 0 {
 		fmt.Println(gray + "No active sessions." + reset)
 		fmt.Println()
 		usage()
 		return
 	}
 
-	current := getCurrentSession()
+	current := tmux.GetCurrentSession()
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	lines := strings.Split(out, "\n")
-	for _, line := range lines {
-		parts := strings.Split(line, "\t")
-		if len(parts) < 5 {
-			continue
-		}
-		name := parts[0]
-		wins := parts[1]
-		attached := parts[2]
-		dir := shortenHome(parts[3])
-		cmd := parts[4]
-
-		winLabel := wins + " win"
-		if wins != "1" {
+	for _, s := range sessions {
+		winLabel := fmt.Sprintf("%d win", s.Windows)
+		if s.Windows != 1 {
 			winLabel += "s"
 		}
 
 		marker := "  "
-		if name == current {
-			marker = yellow + "→ " + reset
+		if s.Name == current {
+			marker = yellow + "-> " + reset
 		}
 
-		if attached != "0" {
+		if s.Attached {
 			fmt.Fprintf(w, "%s%s%s%s\t%s\t%s\t%s\t%s(attached)%s\n",
-				marker, green+bold, name, reset,
-				dir, cmd, winLabel,
+				marker, green+bold, s.Name, reset,
+				s.Dir, s.Command, winLabel,
 				green, reset)
 		} else {
 			fmt.Fprintf(w, "%s%s%s%s\t%s\t%s\t%s\t%s\n",
-				marker, dim, name, reset,
-				gray+dir+reset, gray+cmd+reset, gray+winLabel+reset,
+				marker, dim, s.Name, reset,
+				gray+s.Dir+reset, gray+s.Command+reset, gray+winLabel+reset,
 				gray+"detached"+reset)
 		}
 	}
