@@ -42,21 +42,21 @@ type listItem struct {
 
 // model is the Bubble Tea model
 type model struct {
-	sessions []tmux.Session
-	windows  map[string][]tmux.Window
-	expanded map[string]bool
-	items    []listItem
-	cursor   int
-	preview  string
-	current  string // current tmux session name
-	width    int
-	height   int
-	mode     int
-	input    string
+	sessions   []tmux.Session
+	windows    map[string][]tmux.Window
+	expanded   map[string]bool
+	items      []listItem
+	cursor     int
+	preview    string
+	current    string // current tmux session name
+	width      int
+	height     int
+	mode       int
+	input      string
 	inputLabel string
-	err      string
-	quitting bool
-	attachTo string
+	err        string
+	quitting   bool
+	attachTo   string
 }
 
 func newModel() model {
@@ -229,10 +229,8 @@ func (m model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "shift+tab", "left", "h":
 		if m.cursor >= 0 && m.cursor < len(m.items) {
 			item := m.items[m.cursor]
-			// If on a window, move to its parent session
 			if item.window != nil {
 				name := m.sessions[item.sessionID].Name
-				// Find the parent session item
 				for i, it := range m.items {
 					if it.session != nil && it.session.Name == name {
 						m.cursor = i
@@ -243,7 +241,6 @@ func (m model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.items, m.cursor = rebuildItems(m.sessions, m.expanded, m.windows, m.cursor)
 				return m, m.refreshPreview()
 			}
-			// If on a session, collapse it
 			if item.session != nil {
 				m.expanded[item.session.Name] = false
 				m.items, m.cursor = rebuildItems(m.sessions, m.expanded, m.windows, m.cursor)
@@ -255,7 +252,7 @@ func (m model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		s := m.selectedSession()
 		if s != nil {
 			m.mode = modeConfirmKill
-			m.inputLabel = fmt.Sprintf("Kill session '%s'? (y/n)", s.Name)
+			m.inputLabel = fmt.Sprintf("Kill '%s'? (y/n)", s.Name)
 			m.input = ""
 			return m, nil
 		}
@@ -280,12 +277,11 @@ func (m model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "n":
 		m.mode = modeNewSession
-		m.inputLabel = "New session name: "
+		m.inputLabel = "New session: "
 		m.input = ""
 		return m, nil
 
 	case "K":
-		// Kill all other sessions
 		current := m.current
 		if current == "" {
 			s := m.selectedSession()
@@ -316,7 +312,6 @@ func (m model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "enter":
 		if m.mode == modeConfirmKill {
-			// Require explicit y
 			m.mode = modeNormal
 			m.input = ""
 			m.err = ""
@@ -382,76 +377,79 @@ func (m model) executeInput() (tea.Model, tea.Cmd) {
 }
 
 // --- View ---
+// Built line-by-line with exact width control. No lipgloss layout functions.
 
 func (m model) View() string {
 	if m.quitting {
 		return ""
 	}
-
 	if m.width == 0 || m.height == 0 {
 		return ""
 	}
 
-	// Reserve 1 line for help bar
-	panelHeight := m.height - 1
+	w := m.width
+	h := m.height
 
-	// Split width: 30% list, 70% preview
-	listWidth := m.width * 3 / 10
-	if listWidth < 30 {
-		listWidth = 30
+	// Layout: list panel | separator | preview panel, then help line
+	listW := w * 3 / 10
+	if listW < 20 {
+		listW = 20
 	}
-	previewWidth := m.width - listWidth
-
-	// Inner dimensions (subtract border + padding: 2 border + 2 padding = 4 wide, 2 border tall)
-	innerListW := listWidth - 4
-	innerPreviewW := previewWidth - 4
-	innerH := panelHeight - 2
-
-	if innerListW < 5 {
-		innerListW = 5
+	// 1 char for separator
+	previewW := w - listW - 1
+	if previewW < 10 {
+		previewW = 10
 	}
-	if innerPreviewW < 5 {
-		innerPreviewW = 5
+	bodyH := h - 1 // last line = help
+
+	listLines := m.getListLines(listW, bodyH)
+	previewLines := m.getPreviewLines(previewW, bodyH)
+
+	// Build output line by line
+	var sb strings.Builder
+	for row := 0; row < bodyH; row++ {
+		left := ""
+		if row < len(listLines) {
+			left = listLines[row]
+		}
+		right := ""
+		if row < len(previewLines) {
+			right = previewLines[row]
+		}
+
+		// Pad left to exact width
+		left = padRight(left, listW)
+		// Separator
+		sep := lipgloss.NewStyle().Foreground(colorBorder).Render("│")
+		// Pad right to exact width
+		right = padRight(right, previewW)
+
+		sb.WriteString(left)
+		sb.WriteString(sep)
+		sb.WriteString(right)
+		if row < bodyH-1 {
+			sb.WriteByte('\n')
+		}
 	}
-	if innerH < 1 {
-		innerH = 1
-	}
 
-	listContent := m.renderList(innerListW, innerH)
-	previewContent := m.renderPreview(innerPreviewW, innerH)
+	sb.WriteByte('\n')
+	sb.WriteString(padRight(m.renderHelp(), w))
 
-	listPanel := listPanelStyle.
-		Width(innerListW).
-		Height(innerH).
-		Render(listContent)
-
-	previewPanel := previewPanelStyle.
-		Width(innerPreviewW).
-		Height(innerH).
-		Render(previewContent)
-
-	panels := lipgloss.JoinHorizontal(lipgloss.Top, listPanel, previewPanel)
-
-	// Pad panels to exact width to prevent reflow
-	help := m.renderHelp()
-
-	// Ensure output is exactly m.height lines by using Place
-	fullView := panels + "\n" + help
-	return lipgloss.Place(m.width, m.height, lipgloss.Left, lipgloss.Top, fullView)
+	return sb.String()
 }
 
-func (m model) renderList(w, h int) string {
+func (m model) getListLines(w, h int) []string {
 	if len(m.items) == 0 {
-		return helpStyle.Render("No sessions. Press 'n' to create one.")
+		lines := make([]string, h)
+		lines[0] = helpStyle.Render("No sessions.")
+		lines[1] = helpStyle.Render("Press 'n' to create.")
+		return lines
 	}
 
-	var lines []string
-
-	// Calculate visible range for scrolling
+	// Scrolling
 	start := 0
 	end := len(m.items)
 	if end > h {
-		// Scroll to keep cursor visible
 		half := h / 2
 		if m.cursor > half {
 			start = m.cursor - half
@@ -466,130 +464,139 @@ func (m model) renderList(w, h int) string {
 		}
 	}
 
+	var lines []string
 	for i := start; i < end; i++ {
 		item := m.items[i]
 		selected := i == m.cursor
 
 		if item.window != nil {
-			// Window entry
 			prefix := "  "
 			if selected {
 				prefix = "> "
 			}
-			// Check if last window
 			isLast := i+1 >= len(m.items) || m.items[i+1].window == nil
 			tree := "├─"
 			if isLast {
 				tree = "└─"
 			}
-			label := fmt.Sprintf("%s  %s %d: %s", prefix, tree, item.window.Index, item.window.Name)
+			label := fmt.Sprintf("%s  %s %d:%s", prefix, tree, item.window.Index, item.window.Name)
 			if item.window.Active {
 				label += " *"
 			}
+			label = runesTruncate(label, w)
 			if selected {
-				label = selectedStyle.Render(truncate(label, w))
+				label = selectedStyle.Render(label)
 			} else {
-				label = windowStyle.Render(truncate(label, w))
+				label = windowStyle.Render(label)
 			}
 			lines = append(lines, label)
 		} else if item.session != nil {
-			// Session entry
 			s := item.session
-			marker := "  "
-			if s.Name == m.current {
-				marker = currentMarkerStyle.Render("→ ")
-			}
-
-			prefix := marker
+			prefix := "  "
 			if selected {
-				prefix = selectedStyle.Render("> ")
+				prefix = "> "
+			} else if s.Name == m.current {
+				prefix = "→ "
 			}
 
-			// Expand/collapse indicator
-			expandIcon := "▸"
+			icon := "▸"
 			if m.expanded[s.Name] {
-				expandIcon = "▾"
+				icon = "▾"
 			}
 
-			nameStr := s.Name
-			detail := fmt.Sprintf(" %s  %dw  %s", s.Dir, s.Windows, s.Command)
+			winLabel := fmt.Sprintf("%dw", s.Windows)
+			label := fmt.Sprintf("%s%s %s %s", prefix, icon, s.Name, winLabel)
+			label = runesTruncate(label, w)
 
-			var line string
 			if selected {
-				line = prefix + selectedStyle.Render(expandIcon+" "+nameStr) + selectedStyle.Render(truncate(detail, w-len(expandIcon)-len(nameStr)-4))
+				label = selectedStyle.Render(label)
 			} else if s.Attached {
-				line = prefix + attachedStyle.Render(expandIcon+" "+nameStr) + detachedStyle.Render(truncate(detail, w-len(expandIcon)-len(nameStr)-4))
+				label = attachedStyle.Render(label)
 			} else {
-				line = prefix + detachedStyle.Render(expandIcon+" "+nameStr) + detachedStyle.Render(truncate(detail, w-len(expandIcon)-len(nameStr)-4))
+				label = detachedStyle.Render(label)
 			}
-
-			lines = append(lines, line)
+			lines = append(lines, label)
 		}
 	}
 
-	return strings.Join(lines, "\n")
+	// Pad to full height
+	for len(lines) < h {
+		lines = append(lines, "")
+	}
+	return lines
 }
 
-func (m model) renderPreview(w, h int) string {
+func (m model) getPreviewLines(w, h int) []string {
+	// Title line
+	title := " Preview"
+	if s := m.selectedSession(); s != nil {
+		title = fmt.Sprintf(" %s", s.Name)
+	}
+	title = runesTruncate(title, w)
+	titleLine := lipgloss.NewStyle().Bold(true).Foreground(colorBlue).Render(title)
+
+	lines := make([]string, h)
+	lines[0] = titleLine
+
 	if m.preview == "" {
-		return helpStyle.Render("No preview available")
+		lines[1] = helpStyle.Render(" No preview")
+		return lines
 	}
 
-	// Strip all ANSI escape codes from captured pane content
 	clean := stripAnsi(m.preview)
-	lines := strings.Split(clean, "\n")
+	pLines := strings.Split(clean, "\n")
 
-	// Truncate to fit height
-	if len(lines) > h {
-		lines = lines[len(lines)-h:]
+	// Show last (h-1) lines of preview (most recent output)
+	maxLines := h - 1
+	if len(pLines) > maxLines {
+		pLines = pLines[len(pLines)-maxLines:]
 	}
 
-	// Truncate each line to fit width
-	for i, line := range lines {
-		runes := []rune(line)
-		if len(runes) > w {
-			lines[i] = string(runes[:w])
-		}
+	for i, line := range pLines {
+		lines[i+1] = runesTruncate(line, w)
 	}
 
-	return strings.Join(lines, "\n")
+	return lines
 }
 
 func (m model) renderHelp() string {
-	if m.mode != modeNormal {
-		label := inputStyle.Render(m.inputLabel)
-		cursor := inputStyle.Render(m.input + "█")
-		if m.err != "" {
-			return label + cursor + "  " + errorStyle.Render(m.err)
-		}
-		return label + cursor
+	if m.mode == modeConfirmKill {
+		return helpStyle.Render(" " + m.inputLabel)
 	}
-
-	return helpStyle.Render("  j/k: navigate  enter: attach  tab: expand  n: new  r: rename  c: cmd  x: kill  q: quit")
+	if m.mode != modeNormal {
+		return " " + inputStyle.Render(m.inputLabel) + m.input + "█  " + helpStyle.Render("esc:cancel enter:confirm")
+	}
+	return helpStyle.Render(" j/k:nav  enter:attach  tab:expand  n:new  r:rename  c:cmd  x:kill  q:quit")
 }
+
+// --- helpers ---
 
 func stripAnsi(s string) string {
 	return ansiRegex.ReplaceAllString(s, "")
 }
 
-func truncate(s string, maxW int) string {
+// runesTruncate truncates a plain string to maxW runes
+func runesTruncate(s string, maxW int) string {
 	if maxW <= 0 {
 		return ""
 	}
-	w := lipgloss.Width(s)
-	if w <= maxW {
-		return s
-	}
-	// Strip ANSI first, then truncate by runes
-	clean := stripAnsi(s)
-	runes := []rune(clean)
+	runes := []rune(s)
 	if len(runes) > maxW {
-		if maxW > 3 {
-			return string(runes[:maxW-3]) + "..."
-		}
 		return string(runes[:maxW])
 	}
-	return clean
+	return s
+}
+
+// padRight pads a string with spaces to exact width.
+// Strips ANSI to measure display width, then appends spaces.
+func padRight(s string, w int) string {
+	visible := lipgloss.Width(s)
+	if visible >= w {
+		// Need to truncate — strip ANSI and truncate by runes
+		clean := stripAnsi(s)
+		return runesTruncate(clean, w)
+	}
+	return s + strings.Repeat(" ", w-visible)
 }
 
 // Run starts the TUI and returns the session name to attach to (if any).
