@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -9,6 +10,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/siddharth/ts/tmux"
 )
+
+var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x1b\\|\x1b\][^\x07]*\x07`)
 
 // modes
 const (
@@ -392,8 +395,11 @@ func (m model) View() string {
 	helpHeight := 2
 	availHeight := m.height - helpHeight
 
-	// Split width: 40% list, 60% preview
-	listWidth := m.width * 2 / 5
+	// Split width: 30% list, 70% preview (list needs less space)
+	listWidth := m.width * 3 / 10
+	if listWidth < 30 {
+		listWidth = 30
+	}
 	previewWidth := m.width - listWidth
 
 	// Account for panel borders and padding (2 border + 2 padding = 4 per panel)
@@ -525,7 +531,9 @@ func (m model) renderPreview(w, h int) string {
 		return helpStyle.Render("No preview available")
 	}
 
-	lines := strings.Split(m.preview, "\n")
+	// Strip all ANSI escape codes from captured pane content
+	clean := stripAnsi(m.preview)
+	lines := strings.Split(clean, "\n")
 
 	// Truncate to fit height
 	if len(lines) > h {
@@ -534,7 +542,10 @@ func (m model) renderPreview(w, h int) string {
 
 	// Truncate each line to fit width
 	for i, line := range lines {
-		lines[i] = truncate(line, w)
+		runes := []rune(line)
+		if len(runes) > w {
+			lines[i] = string(runes[:w])
+		}
 	}
 
 	return strings.Join(lines, "\n")
@@ -553,19 +564,28 @@ func (m model) renderHelp() string {
 	return helpStyle.Render("  j/k: navigate  enter: attach  tab: expand  n: new  r: rename  c: cmd  x: kill  q: quit")
 }
 
+func stripAnsi(s string) string {
+	return ansiRegex.ReplaceAllString(s, "")
+}
+
 func truncate(s string, maxW int) string {
 	if maxW <= 0 {
 		return ""
 	}
-	// Simple rune-based truncation
-	runes := []rune(s)
+	w := lipgloss.Width(s)
+	if w <= maxW {
+		return s
+	}
+	// Strip ANSI first, then truncate by runes
+	clean := stripAnsi(s)
+	runes := []rune(clean)
 	if len(runes) > maxW {
 		if maxW > 3 {
 			return string(runes[:maxW-3]) + "..."
 		}
 		return string(runes[:maxW])
 	}
-	return s
+	return clean
 }
 
 // Run starts the TUI and returns the session name to attach to (if any).
