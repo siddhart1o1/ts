@@ -247,6 +247,8 @@ func listSessions() {
 		return
 	}
 
+	current := getCurrentSession()
+
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 	lines := strings.Split(out, "\n")
 	for _, line := range lines {
@@ -265,17 +267,24 @@ func listSessions() {
 			winLabel += "s"
 		}
 
+		marker := "  "
+		if name == current {
+			marker = yellow + "→ " + reset
+		}
+
 		if attached != "0" {
-			fmt.Fprintf(w, "%s%s%s\t%s\t%s\t%s\t%s(attached)%s\n",
-				green+bold, name, reset,
+			fmt.Fprintf(w, "%s%s%s%s\t%s\t%s\t%s\t%s(attached)%s\n",
+				marker, green+bold, name, reset,
 				dir, cmd, winLabel,
 				green, reset)
 		} else {
-			fmt.Fprintf(w, "%s%s%s\t%s\t%s\t%s\t%s\n",
-				dim, name, reset,
+			fmt.Fprintf(w, "%s%s%s%s\t%s\t%s\t%s\t%s\n",
+				marker, dim, name, reset,
 				gray+dir+reset, gray+cmd+reset, gray+winLabel+reset,
 				gray+"detached"+reset)
 		}
 	}
 	w.Flush()
+	fmt.Println()
+	usage()
 }
