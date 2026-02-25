@@ -79,7 +79,7 @@ func refreshSessions() tea.Msg {
 }
 
 func tickCmd() tea.Cmd {
-	return tea.Tick(time.Second, func(t time.Time) tea.Msg {
+	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
 		return tickMsg{}
 	})
 }
@@ -165,7 +165,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tickMsg:
-		return m, tea.Batch(refreshSessions, tickCmd())
+		return m, tea.Batch(refreshSessions, m.refreshPreview(), tickCmd())
 
 	case tea.KeyMsg:
 		if m.mode == modeNormal {
@@ -389,32 +389,32 @@ func (m model) View() string {
 	}
 
 	if m.width == 0 || m.height == 0 {
-		return "Loading..."
+		return ""
 	}
 
-	helpHeight := 2
-	availHeight := m.height - helpHeight
+	// Reserve 1 line for help bar
+	panelHeight := m.height - 1
 
-	// Split width: 30% list, 70% preview (list needs less space)
+	// Split width: 30% list, 70% preview
 	listWidth := m.width * 3 / 10
 	if listWidth < 30 {
 		listWidth = 30
 	}
 	previewWidth := m.width - listWidth
 
-	// Account for panel borders and padding (2 border + 2 padding = 4 per panel)
+	// Inner dimensions (subtract border + padding: 2 border + 2 padding = 4 wide, 2 border tall)
 	innerListW := listWidth - 4
 	innerPreviewW := previewWidth - 4
-	innerH := availHeight - 2 // border top + bottom
+	innerH := panelHeight - 2
 
-	if innerListW < 10 {
-		innerListW = 10
+	if innerListW < 5 {
+		innerListW = 5
 	}
-	if innerPreviewW < 10 {
-		innerPreviewW = 10
+	if innerPreviewW < 5 {
+		innerPreviewW = 5
 	}
-	if innerH < 3 {
-		innerH = 3
+	if innerH < 1 {
+		innerH = 1
 	}
 
 	listContent := m.renderList(innerListW, innerH)
@@ -431,9 +431,13 @@ func (m model) View() string {
 		Render(previewContent)
 
 	panels := lipgloss.JoinHorizontal(lipgloss.Top, listPanel, previewPanel)
+
+	// Pad panels to exact width to prevent reflow
 	help := m.renderHelp()
 
-	return lipgloss.JoinVertical(lipgloss.Left, panels, help)
+	// Ensure output is exactly m.height lines by using Place
+	fullView := panels + "\n" + help
+	return lipgloss.Place(m.width, m.height, lipgloss.Left, lipgloss.Top, fullView)
 }
 
 func (m model) renderList(w, h int) string {
