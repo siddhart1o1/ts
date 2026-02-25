@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -20,6 +19,7 @@ const (
 	modeCommand
 	modeNewSession
 	modeConfirmKill
+	modeConfirmKillProtected
 )
 
 // message types
@@ -31,7 +31,6 @@ type windowsMsg struct {
 }
 
 type previewMsg string
-type tickMsg struct{}
 
 // listItem represents a single item in the flattened list
 type listItem struct {
@@ -68,7 +67,7 @@ func newModel() model {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(refreshSessions, tickCmd())
+	return refreshSessions
 }
 
 // --- data fetching ---
@@ -76,12 +75,6 @@ func (m model) Init() tea.Cmd {
 func refreshSessions() tea.Msg {
 	sessions, _ := tmux.ListSessions()
 	return sessionsMsg(sessions)
-}
-
-func tickCmd() tea.Cmd {
-	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg {
-		return tickMsg{}
-	})
 }
 
 func (m model) refreshPreview() tea.Cmd {
@@ -163,9 +156,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case previewMsg:
 		m.preview = string(msg)
 		return m, nil
-
-	case tickMsg:
-		return m, tea.Batch(refreshSessions, m.refreshPreview(), tickCmd())
 
 	case tea.KeyMsg:
 		if m.mode == modeNormal {
@@ -251,10 +241,23 @@ func (m model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "x":
 		s := m.selectedSession()
 		if s != nil {
-			m.mode = modeConfirmKill
-			m.inputLabel = fmt.Sprintf("Kill '%s'? (y/n)", s.Name)
-			m.input = ""
+			if tmux.IsProtected(s.Name) {
+				m.mode = modeConfirmKillProtected
+				m.inputLabel = fmt.Sprintf("Protected! Type 'yes %s' to kill: ", s.Name)
+				m.input = ""
+			} else {
+				m.mode = modeConfirmKill
+				m.inputLabel = fmt.Sprintf("Kill '%s'? (y/n)", s.Name)
+				m.input = ""
+			}
 			return m, nil
+		}
+
+	case "p":
+		s := m.selectedSession()
+		if s != nil {
+			tmux.SetProtected(s.Name, !tmux.IsProtected(s.Name))
+			return m, refreshSessions
 		}
 
 	case "r":
@@ -281,6 +284,9 @@ func (m model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.input = ""
 		return m, nil
 
+	case "R":
+		return m, tea.Batch(refreshSessions, m.refreshPreview())
+
 	case "K":
 		current := m.current
 		if current == "" {
@@ -291,8 +297,8 @@ func (m model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		if current != "" {
 			for _, s := range m.sessions {
-				if s.Name != current {
-					tmux.Cmd("kill-session", "-t", s.Name)
+				if s.Name != current && !tmux.IsProtected(s.Name) {
+					tmux.Cmd("kill-session", "-t", "="+s.Name)
 				}
 			}
 			return m, refreshSessions
@@ -317,6 +323,15 @@ func (m model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.err = ""
 			return m, nil
 		}
+		if m.mode == modeConfirmKillProtected {
+			s := m.selectedSession()
+			if s != nil && m.input == "yes "+s.Name {
+				return m.executeInput()
+			}
+			m.err = "Confirmation did not match."
+			m.input = ""
+			return m, nil
+		}
 		return m.executeInput()
 
 	case "y":
@@ -334,6 +349,10 @@ func (m model) updateInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.input += "n"
+		return m, nil
+
+	case " ":
+		m.input += " "
 		return m, nil
 
 	case "backspace":
@@ -355,11 +374,11 @@ func (m model) executeInput() (tea.Model, tea.Cmd) {
 	switch m.mode {
 	case modeRename:
 		if m.input != "" && s != nil {
-			tmux.Cmd("rename-session", "-t", s.Name, m.input)
+			tmux.Cmd("rename-session", "-t", "="+s.Name, m.input)
 		}
 	case modeCommand:
 		if m.input != "" && s != nil {
-			tmux.Cmd("send-keys", "-t", s.Name, m.input, "Enter")
+			tmux.Cmd("send-keys", "-t", "="+s.Name, m.input, "Enter")
 		}
 	case modeNewSession:
 		if m.input != "" {
@@ -367,7 +386,11 @@ func (m model) executeInput() (tea.Model, tea.Cmd) {
 		}
 	case modeConfirmKill:
 		if s != nil {
-			tmux.Cmd("kill-session", "-t", s.Name)
+			tmux.Cmd("kill-session", "-t", "="+s.Name)
+		}
+	case modeConfirmKillProtected:
+		if s != nil {
+			tmux.Cmd("kill-session", "-t", "="+s.Name)
 		}
 	}
 	m.mode = modeNormal
@@ -387,7 +410,7 @@ func (m model) View() string {
 		return ""
 	}
 
-	w := m.width
+	w := m.width - 1 // 1 char safety margin to prevent line wrapping
 	h := m.height
 
 	// Layout: list panel | separator | preview panel, then help line
@@ -419,8 +442,8 @@ func (m model) View() string {
 
 		// Pad left to exact width
 		left = padRight(left, listW)
-		// Separator
-		sep := lipgloss.NewStyle().Foreground(colorBorder).Render("│")
+		// Plain ASCII separator — Unicode box chars can be ambiguous width
+		sep := "|"
 		// Pad right to exact width
 		right = padRight(right, previewW)
 
@@ -504,8 +527,12 @@ func (m model) getListLines(w, h int) []string {
 				icon = "▾"
 			}
 
+			lock := ""
+			if tmux.IsProtected(s.Name) {
+				lock = " *"
+			}
 			winLabel := fmt.Sprintf("%dw", s.Windows)
-			label := fmt.Sprintf("%s%s %s %s", prefix, icon, s.Name, winLabel)
+			label := fmt.Sprintf("%s%s %s%s %s", prefix, icon, s.Name, lock, winLabel)
 			label = runesTruncate(label, w)
 
 			if selected {
@@ -563,10 +590,17 @@ func (m model) renderHelp() string {
 	if m.mode == modeConfirmKill {
 		return helpStyle.Render(" " + m.inputLabel)
 	}
+	if m.mode == modeConfirmKillProtected {
+		errMsg := ""
+		if m.err != "" {
+			errMsg = "  " + errorStyle.Render(m.err)
+		}
+		return " " + inputStyle.Render(m.inputLabel) + m.input + "█  " + helpStyle.Render("esc:cancel enter:confirm") + errMsg
+	}
 	if m.mode != modeNormal {
 		return " " + inputStyle.Render(m.inputLabel) + m.input + "█  " + helpStyle.Render("esc:cancel enter:confirm")
 	}
-	return helpStyle.Render(" j/k:nav  enter:attach  tab:expand  n:new  r:rename  c:cmd  x:kill  q:quit")
+	return helpStyle.Render(" j/k:nav  enter:attach  tab:expand  R:refresh  n:new  r:rename  c:cmd  x:kill  p:protect  q:quit")
 }
 
 // --- helpers ---

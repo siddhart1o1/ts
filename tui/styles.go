@@ -39,8 +39,7 @@ var (
 			Foreground(colorGray)
 
 	windowStyle = lipgloss.NewStyle().
-			Foreground(colorGray).
-			PaddingLeft(2)
+			Foreground(colorGray)
 
 	helpStyle = lipgloss.NewStyle().
 			Foreground(colorGray)

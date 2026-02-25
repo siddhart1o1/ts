@@ -104,3 +104,42 @@ func CapturePane(target string) string {
 	out, _ := Cmd("capture-pane", "-t", target, "-p")
 	return out
 }
+
+func IsProtected(session string) bool {
+	out, err := Cmd("show-option", "-t", session, "-v", "@ts_protected")
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(out) == "1"
+}
+
+func SetProtected(session string, protected bool) error {
+	if protected {
+		if _, err := Cmd("set-option", "-t", session, "@ts_protected", "1"); err != nil {
+			return err
+		}
+		Cmd("set-option", "-t", session, "remain-on-exit", "on")
+		_, err := Cmd("set-hook", "-t", session, "pane-died", "detach-client")
+		return err
+	}
+	if _, err := Cmd("set-option", "-t", session, "-u", "@ts_protected"); err != nil {
+		return err
+	}
+	Cmd("set-option", "-t", session, "remain-on-exit", "off")
+	_, err := Cmd("set-hook", "-t", session, "-u", "pane-died")
+	return err
+}
+
+func RespawnDeadPanes(session string) {
+	out, err := Cmd("list-panes", "-t", session, "-F", "#{pane_id}\t#{pane_dead}")
+	if err != nil || out == "" {
+		return
+	}
+	for _, line := range strings.Split(out, "\n") {
+		parts := strings.SplitN(line, "\t", 2)
+		if len(parts) == 2 && parts[1] == "1" {
+			Cmd("respawn-pane", "-t", parts[0])
+		}
+	}
+}
+
